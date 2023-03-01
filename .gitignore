@@ -1,0 +1,7 @@
+derived_data
+data
+__pycache__
+derived_data.tar.gz
+yolov8x.pt
+vitpose-h-multi-coco.pth
+eva_coco_seg.pth

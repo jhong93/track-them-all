@@ -24,32 +24,16 @@ def init_model(device='cuda'):
     DATASET_INFO = DatasetInfo(MODEL.cfg.data['test'].get('dataset_info', None))
 
 
-def infer_pose(img, boxes, visualize=False):
+def infer_pose(img, boxes):
     person_results = [
         {'bbox': np.array([x, y, x + w, y + h])} for x, y, w, h in boxes]
-    pose_results, _ = inference_top_down_pose_model(
+    pose_results, returned_outputs = inference_top_down_pose_model(
         MODEL,
         img,
         person_results,
         format='xyxy',
         dataset=DATASET,
         dataset_info=DATASET_INFO,
-        return_heatmap=False,
+        return_heatmap=True,
         outputs=None)
-
-    if visualize:
-        # show the results
-        vis_img = vis_pose_result(
-            MODEL,
-            img,
-            pose_results,
-            radius=4,
-            thickness=1,
-            dataset=DATASET,
-            dataset_info=DATASET_INFO,
-            kpt_score_thr=0.3,
-            show=False)
-        cv2.imshow('Image', vis_img)
-        cv2.waitKey(1)
-
-    return pose_results
+    return pose_results, returned_outputs

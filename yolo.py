@@ -9,7 +9,7 @@ def init_model():
 
 def infer(img):
     dets = []
-    result = yolo_model([img])[0]
+    result = yolo_model([img], verbose=False)[0]
     for box in result.boxes:
         x, y, x2, y2 = box.xyxy[0].tolist()
         w, h = x2 - x, y2 -y
