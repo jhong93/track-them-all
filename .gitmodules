@@ -1,0 +1,6 @@
+[submodule "deps/ViTPose"]
+	path = deps/ViTPose
+	url = https://github.com/ViTAE-Transformer/ViTPose.git
+[submodule "deps/EVA"]
+	path = deps/EVA
+	url = https://github.com/baaivision/EVA.git
