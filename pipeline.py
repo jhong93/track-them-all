@@ -37,7 +37,8 @@ def get_args():
     parser = argparse.ArgumentParser()
     parser.add_argument('video_file')
     parser.add_argument('-y', '--use_yolo', action='store_true')
-    parser.add_argument('-v', '--visualize', action='store_true')
+    parser.add_argument('-v', '--visualize_detection', action='store_true')
+    parser.add_argument('-vt', '--visualize_tracking', action='store_true')
     parser.add_argument('--limit', type=int)
     parser.add_argument('--out_dir')
     return parser.parse_args()
@@ -78,7 +79,7 @@ def is_cropped_pose(keyp, width, height):
         return True
 
     low_shoulder_threshold = height * 0.8
-    if min(keyp[[Pose.RShoulder, Pose.LShouler], 1]) > low_shoulder_threshold:
+    if min(keyp[[Pose.RShoulder, Pose.LShoulder], 1]) > low_shoulder_threshold:
         return True
 
     vedge_threshold = width * 0.1
@@ -241,7 +242,8 @@ def group_by_track_and_infer_contact(dets):
 
         # Use iterator to save memory
         pose = np.stack(pose)
-        heatmap = np.stack(heatmap) if heatmap[0] is not None
+        if heatmap[0] is not None:
+            heatmap = np.stack(heatmap)
         vipe = np.stack(vipe)
         contacts = contact.infer_contact(contact_model, pose)
         yield (track, meta, pose, heatmap, mask, vipe, contacts)
@@ -291,8 +293,8 @@ def save_results(video_file, out_dir, track_iterator):
     })
 
 
-def main(video_file, use_yolo, visualize, out_dir, limit):
-    if use_yolo:
+def main(args):
+    if args.use_yolo:
         yolo.init_model()
     else:
         eva.init_model()
@@ -305,27 +307,29 @@ def main(video_file, use_yolo, visualize, out_dir, limit):
     contact_model = contact.load_contact_model()
 
     def process(video_file, out_dir):
-        detections = detect_people(video_file, use_yolo, limit)
+        detections = detect_people(
+            video_file, args.use_yolo, args.limit,
+            visualize=args.visualize_detection)
         detections = track_people(detections)
-        if visualize:
+        if args.visualize_tracking:
             visualize_people(video_file, detections)
 
         track_detections = group_by_track_and_infer_contact(detections)
         if out_dir is not None:
             save_results(video_file, out_dir, track_detections)
 
-    if os.path.isdir(video_file):
-        video_dir = video_file
+    if os.path.isdir(args.video_file):
+        video_dir = args.video_file
         for video_file in tqdm(os.listdir(video_dir)):
             if video_file.endswith('.mp4'):
                 video_name = os.path.splitext(video_file)[0]
                 print('Processing:', video_name)
                 process(os.path.join(video_dir, video_file),
-                        os.path.join(out_dir, video_name))
+                        os.path.join(args.out_dir, video_name))
     else:
-        process(video_file, out_dir)
+        process(args.video_file, args.out_dir)
     print('Done!')
 
 
 if __name__ == '__main__':
-    main(**vars(get_args()))
+    main(get_args())
