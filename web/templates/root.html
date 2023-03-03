@@ -17,7 +17,7 @@ img {
 {% block body %}
 <div class="container">
     <div class="container">
-        <h1>Reject or Accept Tracks</h1>
+        <h1>Accept or Reject Tracks</h1>
     </div>
 
     <hr>
@@ -27,8 +27,20 @@ img {
             <span class="value">{{ num_tracks }}</span>
         </div>
         <div class="kv">
+            <span class="key"># accepted:</span>
+            <span class="value">{{ num_accepted }}</span>
+        </div>
+        <div class="kv">
+            <span class="key"># unlabeled:</span>
+            <span class="value">{{ num_unlabeled }}</span>
+        </div>
+        <div class="kv">
             <span class="key"># frames:</span>
             <span class="value">{{ num_frames }}</span>
+        </div>
+        <div class="kv">
+            <span class="key"># accepted frames:</span>
+            <span class="value">{{ num_frames_accepted }}</span>
         </div>
         <div class="kv">
             <span class="key">Show:</span>
@@ -44,7 +56,8 @@ img {
 
     <hr>
     <div class="container">
-        <span class="help">List of all of the tracks. Click the preview strip to play animation.</span>
+        <span class="help">List of tracks. Click the preview strip to play video.</span>
+        {% if tracks | length > 0 %}
         {% for t in tracks %}
         <div class="lblock" id="track-{{ t.id }}">
             <div class="kv">
@@ -59,7 +72,7 @@ img {
                     <input type="radio" class="btn-check label" name="btnrad-{{ t.id }}" id="btnrad-{{ t.id }}-accept" value="accept" autocomplete="off" {% if t.label == "accept" %}checked{% endif %}>
                     <label class="btn btn-sm btn-outline-success" for="btnrad-{{ t.id }}-accept">Accept</label>
 
-                    <input type="radio" class="btn-check label" name="btnrad-{{ t.id }}" id="btnrad-{{ t.id }}-reject" value="accept" autocomplete="off" {% if t.label == "reject" %}checked{% endif %}>
+                    <input type="radio" class="btn-check label" name="btnrad-{{ t.id }}" id="btnrad-{{ t.id }}-reject" value="reject" autocomplete="off" {% if t.label == "reject" %}checked{% endif %}>
                     <label class="btn btn-sm btn-outline-danger" for="btnrad-{{ t.id }}-reject">Reject</label>
 
                     <input type="radio" class="btn-check label" name="btnrad-{{ t.id }}" id="btnrad-{{ t.id }}-garbage" value="rejectmany" autocomplete="off">
@@ -74,6 +87,9 @@ img {
             <img class="track-preview" src="/track-preview/{{ t.id }}" loading="lazy">
         </div>
         {% endfor %}
+        {% else %}
+        No tracks to show. Try showing all.
+        {% endif %}
     </div>
 
     <div id="play-div" class="overlay-top-right" style="display: none;">
@@ -87,13 +103,31 @@ img {
 {% block code %}
 <script>
 $('.track-preview').click(function() {
-    let track_id = parseInt($(this).parent('.lblock').attr('id').split('-')[1]);
+    let track_id = parseInt($(this).parents('.lblock').attr('id').split('-')[1]);
     $('#play-gif').attr('src', `/track-gif/${track_id}`);
     $('#play-div').show();
 });
 
 $('input.label').change(function() {
-    console.log('Labeled')
+    let elem = $(this);
+    let value = elem.val();
+    let track_id = elem.parents('.lblock').attr('id').split('-')[1];
+    console.log(`Labeled ${track_id} with "${value}"`);
+
+    $.ajax({
+        type: 'POST',
+        url: `/label/${track_id}?value=${value}`,
+        success: function(data) {
+            console.log('Accepted:', data)
+            if (value == 'rejectmany') {
+                location.reload();
+            }
+        },
+        error: function(data) {
+            console.log('Error:', data)
+            alert('Failed to update label! See console.');
+        }
+    })
 });
 </script>
 {% endblock %}

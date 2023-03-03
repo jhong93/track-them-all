@@ -16,6 +16,7 @@ import yolo
 
 from util.video import get_metadata
 from util.box import Box, PersonMeta
+from util.body import Pose
 from util.sort import Sort
 from util.vis import draw
 from util.io import store_gz_json, store_json
@@ -71,6 +72,23 @@ class VideoAsFrames(Dataset):
         return self.meta.num_frames
 
 
+def is_cropped_pose(keyp, width, height):
+    low_hip_threshold = height * 0.9
+    if min(keyp[[Pose.RHip, Pose.LHip], 1]) > low_hip_threshold:
+        return True
+
+    low_shoulder_threshold = height * 0.8
+    if min(keyp[[Pose.RShoulder, Pose.LShouler], 1]) > low_shoulder_threshold:
+        return True
+
+    vedge_threshold = width * 0.1
+    if (max(keyp[:, 0]) < vedge_threshold
+        or min(keyp[:, 0]) > width - vedge_threshold
+    ):
+        return True
+    return False
+
+
 def detect_people(video_file, use_yolo, limit, visualize=False, heatmap=False):
     infer = yolo.infer if use_yolo else eva.infer
 
@@ -110,14 +128,16 @@ def detect_people(video_file, use_yolo, limit, visualize=False, heatmap=False):
         # Batch the pose computation
         pose, extra_outputs = vitpose.infer_pose(
             frame, bboxes_for_pose, heatmap=heatmap)
+        frame_dets_cpy = []
         for i, det in enumerate(frame_dets):
             keyp = pose[i]['keypoints']
+
+            if is_cropped_pose(keyp, dataset.meta.width, dataset.meta.height):
+                continue
 
             heatmap = extra_outputs[0]['heatmap'][i] if heatmap else None
             keyp_vipe = vipe.preprocess_2d_keyp(keyp, flip=False)
             vipe_emb = vipe_model.embed(keyp_vipe)[0]
-
-            # TODO: reject poses that are cropped
 
             # TODO: masks and heatmaps take too much space
             det._payload = PersonMeta(
@@ -125,6 +145,9 @@ def detect_people(video_file, use_yolo, limit, visualize=False, heatmap=False):
                 pose_heatmap=heatmap,
                 mask=det.payload,
                 vipe=vipe_emb)
+            frame_dets_cpy.append(det)
+        frame_dets = frame_dets_cpy
+        del frame_dets_cpy
 
         if visualize:
             frame = draw(frame, frame_dets)
@@ -187,7 +210,7 @@ def track_people(dets):
     return dets
 
 
-def group_by_track(dets):
+def group_by_track_and_infer_contact(dets):
     det_by_track = defaultdict(list)
     for t, frame_dets in enumerate(dets):
         for d in frame_dets:
@@ -195,7 +218,6 @@ def group_by_track(dets):
                 det_by_track[d.track].append((t, d))
     print('# tracks:', max(det_by_track.keys()))
 
-    tracks = {}
     for track in det_by_track:
         dets = det_by_track[track]
         if len(dets) < MIN_TRACK_LEN:
@@ -217,12 +239,12 @@ def group_by_track(dets):
             vipe.append(d.payload.vipe)
             pose.append(d.payload.pose)
 
+        # Use iterator to save memory
         pose = np.stack(pose)
-        # heatmap = np.stack(heatmap)
+        heatmap = np.stack(heatmap) if heatmap[0] is not None
         vipe = np.stack(vipe)
         contacts = contact.infer_contact(contact_model, pose)
-        tracks[track] = (meta, pose, heatmap, mask, vipe, contacts)
-    return tracks
+        yield (track, meta, pose, heatmap, mask, vipe, contacts)
 
 
 def visualize_people(video_file, dets):
@@ -242,10 +264,9 @@ def visualize_people(video_file, dets):
     cv2.destroyAllWindows()
 
 
-def save_results(video_file, out_dir, tracks):
+def save_results(video_file, out_dir, track_iterator):
     print('Saving results:')
-    for track in tracks:
-        meta, pose, heatmap, mask, vipe, contacts = tracks[track]
+    for track, meta, pose, heatmap, mask, vipe, contacts in track_iterator:
         track_dir = os.path.join(out_dir, '{:06d}'.format(track))
 
         os.makedirs(track_dir)
@@ -253,7 +274,11 @@ def save_results(video_file, out_dir, tracks):
         np.save(os.path.join(track_dir, 'vipe.npy'), vipe)
         np.save(os.path.join(track_dir, 'pose.npy'), pose)
         np.save(os.path.join(track_dir, 'contact.npy'), contacts)
+
+        # NOTE: dont bother with heatmaps
         # np.save(os.path.join(track_dir, 'pose_heatmap.npy'), heatmap)
+
+        # NOTE: find better way to store masks
         np.savez_compressed(os.path.join(track_dir, 'mask.npz'), **mask)
 
     meta = get_metadata(video_file)
@@ -285,7 +310,7 @@ def main(video_file, use_yolo, visualize, out_dir, limit):
         if visualize:
             visualize_people(video_file, detections)
 
-        track_detections = group_by_track(detections)
+        track_detections = group_by_track_and_infer_contact(detections)
         if out_dir is not None:
             save_results(video_file, out_dir, track_detections)
 

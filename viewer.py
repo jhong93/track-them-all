@@ -9,7 +9,7 @@ import cv2
 from PIL import Image
 import numpy as np
 
-from flask import Flask, send_file, render_template, request
+from flask import Flask, send_file, render_template, request, jsonify
 
 from util.video import get_metadata
 from util.box import Box, PersonMeta
@@ -58,8 +58,6 @@ def list_tracks(track_dir):
                 min_t,
                 det_data))
             count += 1
-
-    tracks.sort(key=lambda x: (-x.length, x.video, x.track))
     return tracks
 
 
@@ -81,18 +79,22 @@ def get_label(track):
 
 def set_label(track, value):
     label_path = os.path.join(track.path, 'label.json')
-    if value is not None:
+    if value is None:
+        print('Clear:', label_path)
         if os.path.exists(label_path):
             os.remove(label_path)
     else:
+        print('Set:', label_path)
         store_json(label_path, {
-            'value': value, 'time': datetime.now().isoformat()})
+            'value': value, 'time': datetime.datetime.now().isoformat()})
 
 
-def track_temporal_sim(t1, t2):
+def track_iou(t1, t2):
     overlap = min(t1.min_frame + t1.length, t2.min_frame + t2.length) - max(
         t1.min_frame, t2.min_frame)
-    return max(0, overlap) / t1.length
+    if overlap < 0:
+        return 0.
+    return overlap / (t1.length + t2.length - overlap)
 
 
 def build_app(args):
@@ -112,9 +114,19 @@ def build_app(args):
         select = request.args.get('select')
         unlabeled_only = select == 'nolabel'
 
+        num_accept = 0
+        num_unlabeled = 0
+        num_frames_accepted = 0
+
         filtered_tracks = []
         for t in tracks:
             label = get_label(t)
+            if label is None:
+                num_unlabeled += 1
+            elif label == 'accept':
+                num_accept += 1
+                num_frames_accepted += t.length
+
             if select is not None:
                 if unlabeled_only:
                     if label is not None:
@@ -126,15 +138,20 @@ def build_app(args):
                 id=t.id, video=t.video, track=t.track, length=t.length,
                 label=label))
 
+        filtered_tracks.sort(key=lambda x: -x.length)
         return render_template(
             'root.html',
             num_tracks=len(tracks),
             num_frames=sum(t.length + 1 for t in tracks),
+            num_accepted=num_accept,
+            num_unlabeled=num_unlabeled,
+            num_frames_accepted=num_frames_accepted,
             tracks=filtered_tracks)
 
     @app.route('/label/<int:id>', methods=['POST'])
-    def label(id):
+    def _set_label(id):
         value = request.args.get('value')
+
         track = tracks[id]
         if value not in ['', 'accept', 'reject', 'rejectmany', 'flag']:
             return 'Error', 400
@@ -142,7 +159,7 @@ def build_app(args):
             to_set = [track]
             for t in tracks:
                 if t.id != id and t.video == track.video:
-                    if track_temporal_sim(t, track) > 0.5:
+                    if track_iou(t, track) > 0:
                         # Also reject t
                         to_set.append(t)
             for t in to_set:
@@ -153,6 +170,10 @@ def build_app(args):
                 value = None
             set_label(track, value)
             return 'Success: {}'.format(value), 200
+
+    @app.route('/label/<int:id>', methods=['GET'])
+    def _get_label(id):
+        return str(get_label(tracks[id])), 200
 
     def load_frames(track, out_height=480):
         pose = np.load(os.path.join(track.path, 'pose.npy'), mmap_mode='r')
@@ -222,6 +243,20 @@ def build_app(args):
                   duration=1 / fps * 5, loop=0)
         gif_bytes.seek(0)
         return send_file(gif_bytes, mimetype='image/gif')
+
+    @app.route('/labels')
+    @app.route('/labels.json')
+    def get_labels():
+        result = []
+        for t in tracks:
+            label = get_label(t)
+            if label == 'accept':
+                result.append({
+                    'video': t.video,
+                    'track': t.track,
+                    'length': t.length
+                })
+        return jsonify(result)
 
     return app
 
