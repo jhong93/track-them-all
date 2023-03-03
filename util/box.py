@@ -1,3 +1,5 @@
+from typing import NamedTuple
+
 
 ID_COUNTER = 0
 
@@ -95,3 +97,10 @@ class Box:
     def __eq__(self, b2):
         return (self.x == b2.x and self.y == b2.y
                 and self.w == b2.w and self.h == b2.h)
+
+
+class PersonMeta(NamedTuple):
+    pose: 'np.ndarray' = None
+    pose_heatmap: 'np.ndarray' = None
+    mask: 'np.ndarray' = None
+    vipe: 'np.ndarray' = None

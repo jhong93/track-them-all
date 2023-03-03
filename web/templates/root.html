@@ -1,0 +1,99 @@
+{% extends "base.html" %}
+
+{% block imports %}
+<style>
+img {
+    max-width: 100%;
+}
+
+.btn:focus {
+  outline: none;
+  box-shadow: none;
+}
+</style>
+
+{% endblock %}
+
+{% block body %}
+<div class="container">
+    <div class="container">
+        <h1>Reject or Accept Tracks</h1>
+    </div>
+
+    <hr>
+    <div class="container">
+        <div class="kv">
+            <span class="key"># tracks:</span>
+            <span class="value">{{ num_tracks }}</span>
+        </div>
+        <div class="kv">
+            <span class="key"># frames:</span>
+            <span class="value">{{ num_frames }}</span>
+        </div>
+        <div class="kv">
+            <span class="key">Show:</span>
+            <span class="value">
+                <a href="/">[All]</a>
+                <a href="/?select=nolabel">[Unlabeled]</a>
+                <a href="/?select=accept">[Accepted]</a>
+                <a href="/?select=reject">[Rejected]</a>
+                <a href="/?select=flag">[Flagged]</a>
+            </span>
+        </div>
+    </div>
+
+    <hr>
+    <div class="container">
+        <span class="help">List of all of the tracks. Click the preview strip to play animation.</span>
+        {% for t in tracks %}
+        <div class="lblock" id="track-{{ t.id }}">
+            <div class="kv">
+                <span class="key">{{ t.id }}</span>
+                <span class="value">{{ t.video }}, {{ t.track }}, {{ t.length }} frames</span>
+            </div>
+            <div class="controls">
+                <div class="btn-group" role="group">
+                    <input type="radio" class="btn-check label" name="btnrad-{{ t.id }}" id="btnrad-{{ t.id }}-unlabeled" value="" autocomplete="off" {% if t.label is none %}checked{% endif %}>
+                    <label class="btn btn-sm btn-outline-secondary" for="btnrad-{{ t.id }}-unlabeled">Unlabeled</label>
+
+                    <input type="radio" class="btn-check label" name="btnrad-{{ t.id }}" id="btnrad-{{ t.id }}-accept" value="accept" autocomplete="off" {% if t.label == "accept" %}checked{% endif %}>
+                    <label class="btn btn-sm btn-outline-success" for="btnrad-{{ t.id }}-accept">Accept</label>
+
+                    <input type="radio" class="btn-check label" name="btnrad-{{ t.id }}" id="btnrad-{{ t.id }}-reject" value="accept" autocomplete="off" {% if t.label == "reject" %}checked{% endif %}>
+                    <label class="btn btn-sm btn-outline-danger" for="btnrad-{{ t.id }}-reject">Reject</label>
+
+                    <input type="radio" class="btn-check label" name="btnrad-{{ t.id }}" id="btnrad-{{ t.id }}-garbage" value="rejectmany" autocomplete="off">
+                    <label class="btn btn-sm btn-outline-warning" for="btnrad-{{ t.id }}-garbage">Reject all overlapping</label>
+
+                    <input type="radio" class="btn-check label" name="btnrad-{{ t.id }}" id="btnrad-{{ t.id }}-flag" value="flag" autocomplete="off"
+                    {% if t.label == "flag" %}checked{% endif %} >
+                    <label class="btn btn-sm btn-outline-dark" for="btnrad-{{ t.id }}-flag">Flag</label>
+                </div>
+            </div>
+
+            <img class="track-preview" src="/track-preview/{{ t.id }}" loading="lazy">
+        </div>
+        {% endfor %}
+    </div>
+
+    <div id="play-div" class="overlay-top-right" style="display: none;">
+        <span style="margin: 0; display: block;">A GIF of the selected track.</span>
+        <img id="play-gif" style="width: 480px;">
+    </div>
+
+<div class='footer-space'></div>
+{% endblock %}
+
+{% block code %}
+<script>
+$('.track-preview').click(function() {
+    let track_id = parseInt($(this).parent('.lblock').attr('id').split('-')[1]);
+    $('#play-gif').attr('src', `/track-gif/${track_id}`);
+    $('#play-div').show();
+});
+
+$('input.label').change(function() {
+    console.log('Labeled')
+});
+</script>
+{% endblock %}

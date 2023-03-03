@@ -63,13 +63,8 @@ def encode_png(data, optimize=True):
 
 
 def load_text(fpath):
-    lines = []
     with open(fpath, 'r') as fp:
-        for l in fp:
-            l = l.strip()
-            if l:
-                lines.append(l)
-    return lines
+        return fp.read().strip()
 
 
 def store_text(fpath, s):

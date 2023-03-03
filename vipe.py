@@ -161,7 +161,11 @@ def preprocess_2d_keyp(kp, flip, to_tensor=True):
     return torch.FloatTensor(kp) if to_tensor else kp
 
 
-def load_embedding_model(model_dir, device='cuda'):
+DEFAULT_MODEL_DIR = os.path.join(
+    os.path.dirname(os.path.realpath(__file__)), 'pretrained_vipe')
+
+
+def load_embedding_model(model_dir=DEFAULT_MODEL_DIR, device='cuda'):
     print('Loading embedding model:', model_dir)
     model_param_file = os.path.join(model_dir, 'config.json')
     model_params = load_json(model_param_file)

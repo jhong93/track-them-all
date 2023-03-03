@@ -24,7 +24,7 @@ def init_model(device='cuda'):
     DATASET_INFO = DatasetInfo(MODEL.cfg.data['test'].get('dataset_info', None))
 
 
-def infer_pose(img, boxes):
+def infer_pose(img, boxes, heatmap=False):
     person_results = [
         {'bbox': np.array([x, y, x + w, y + h])} for x, y, w, h in boxes]
     pose_results, returned_outputs = inference_top_down_pose_model(
@@ -34,6 +34,6 @@ def infer_pose(img, boxes):
         format='xyxy',
         dataset=DATASET,
         dataset_info=DATASET_INFO,
-        return_heatmap=True,
+        return_heatmap=heatmap,
         outputs=None)
     return pose_results, returned_outputs

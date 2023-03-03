@@ -2,23 +2,22 @@
 
 import os
 import argparse
-import random
 from collections import defaultdict
-from typing import NamedTuple
 import cv2
 import numpy as np
-import torch
 from torch.utils.data import DataLoader, Dataset
-from tqdm import tqdm
+from tqdm import tqdm, trange
 
-from vipe import load_embedding_model, preprocess_2d_keyp
+import vipe
+import contact
 import vitpose
 import eva
 import yolo
 
 from util.video import get_metadata
-from util.box import Box
+from util.box import Box, PersonMeta
 from util.sort import Sort
+from util.vis import draw
 from util.io import store_gz_json, store_json
 
 cv2.setNumThreads(4)
@@ -33,15 +32,6 @@ MAX_HEIGHT = 0.8
 MIN_TRACK_LEN = 60
 
 
-BOX_COLOR = (0, 0, 255)
-
-LEFT_COLOR = (120, 200, 255)
-RIGHT_COLOR = (120, 255, 200)
-
-LEFT_BONES = [(5, 0), (7, 5), (9, 7), (11, 5), (13, 11), (15, 13)]
-RIGHT_BONES = [(6, 0), (8, 6), (10, 8), (12, 6), (14, 12), (16, 14)]
-
-
 def get_args():
     parser = argparse.ArgumentParser()
     parser.add_argument('video_file')
@@ -50,58 +40,6 @@ def get_args():
     parser.add_argument('--limit', type=int)
     parser.add_argument('--out_dir')
     return parser.parse_args()
-
-
-class PersonMeta(NamedTuple):
-    pose: 'np.ndarray'
-    pose_heatmap: 'np.ndarray'
-    mask: 'np.ndarray'
-    vipe: 'np.ndarray'
-
-
-def draw(frame, boxes, alpha=0.33, track_colors={}):
-    has_mask = False
-
-    for box in boxes:
-        if box.track is None:
-            box_color = BOX_COLOR
-        else:
-            if box.track not in track_colors:
-                track_colors[box.track] = tuple([
-                    random.randint(0, 255) for _ in range(3)])
-            box_color = track_colors[box.track]
-
-        cv2.rectangle(
-            frame, (int(box.x), int(box.y)),
-            (int(box.x + box.w), int(box.y + box.h)),
-            box_color, 2)
-        cv2.putText(frame, '{:0.3f}'.format(box.score),
-                    (int(box.x), int(box.y) + 25),
-                    cv2.FONT_HERSHEY_SIMPLEX,
-                    1, box_color, 1)
-
-        for bones, color in (
-            (LEFT_BONES, LEFT_COLOR),
-            (RIGHT_BONES, RIGHT_COLOR),
-        ):
-            for b1, b2 in bones:
-                b1_int = (int(box.payload.pose[b1, 0]),
-                          int(box.payload.pose[b1, 1]))
-                b2_int = (int(box.payload.pose[b2, 0]),
-                          int(box.payload.pose[b2, 1]))
-                cv2.line(frame, b1_int, b2_int, color, 2)
-
-        if box.payload.mask is not None:
-            if not has_mask:
-                mask_frame = np.zeros_like(frame)
-            has_mask = True
-
-            x, y, w, h = int(box.x), int(box.y), int(box.w), int(box.h)
-            mask_frame[y:y + h, x:x + w, 2] = box.payload.mask * 255
-
-    if has_mask:
-        frame = cv2.addWeighted(frame, 1. - alpha, mask_frame, alpha, 0.)
-    return frame
 
 
 class VideoAsFrames(Dataset):
@@ -133,7 +71,7 @@ class VideoAsFrames(Dataset):
         return self.meta.num_frames
 
 
-def detect_people(video_file, use_yolo, limit, visualize=False):
+def detect_people(video_file, use_yolo, limit, visualize=False, heatmap=False):
     infer = yolo.infer if use_yolo else eva.infer
 
     dataset = VideoAsFrames(video_file)
@@ -171,18 +109,22 @@ def detect_people(video_file, use_yolo, limit, visualize=False):
 
         # Batch the pose computation
         pose, extra_outputs = vitpose.infer_pose(
-            frame, bboxes_for_pose)
+            frame, bboxes_for_pose, heatmap=heatmap)
         for i, det in enumerate(frame_dets):
             keyp = pose[i]['keypoints']
-            heatmap = extra_outputs[0]['heatmap'][i]
-            keyp_vipe = preprocess_2d_keyp(keyp, flip=False)
-            vipe = vipe_model.embed(keyp_vipe)[0]
 
+            heatmap = extra_outputs[0]['heatmap'][i] if heatmap else None
+            keyp_vipe = vipe.preprocess_2d_keyp(keyp, flip=False)
+            vipe_emb = vipe_model.embed(keyp_vipe)[0]
+
+            # TODO: reject poses that are cropped
+
+            # TODO: masks and heatmaps take too much space
             det._payload = PersonMeta(
                 pose=keyp,
                 pose_heatmap=heatmap,
                 mask=det.payload,
-                vipe=vipe)
+                vipe=vipe_emb)
 
         if visualize:
             frame = draw(frame, frame_dets)
@@ -226,21 +168,18 @@ def compute_sort_tracks(all_dets, max_age=1):
                     if best is not None:
                         tmp.append((int(obj_id), best))
                 tracks.append((frame, tmp))
-
-        prev_frame = frame
     return tracks
 
 
 def track_people(dets):
     sort_tracks = compute_sort_tracks(dets)
-
     for frame, track_and_boxes in sort_tracks:
         if track_and_boxes is not None and len(track_and_boxes) > 0:
             for d in dets[frame]:
                 best_iou = 0.8
                 best_track = None
                 for track_id, b in track_and_boxes:
-                    if b.iou(d) > 0.8:
+                    if b.iou(d) > best_iou:
                         best_track = track_id
 
                 if best_track is not None:
@@ -248,32 +187,15 @@ def track_people(dets):
     return dets
 
 
-def visualize_people(video_file, dets):
-    vc = cv2.VideoCapture(video_file)
-    num_frames = int(vc.get(cv2.CAP_PROP_FRAME_COUNT))
-
-    for i in trange(num_frames, desc='Detect'):
-        ret, frame = vc.read()
-        if not ret:
-            break
-
-        draw(frame, dets[i])
-        cv2.imshow('frame', frame)
-        cv2.waitKey(1)
-
-    vc.release()
-    if visualize:
-        cv2.destroyAllWindows()
-
-
-def save_results(out_dir, all_dets):
+def group_by_track(dets):
     det_by_track = defaultdict(list)
-    for t, frame_dets in enumerate(all_dets):
+    for t, frame_dets in enumerate(dets):
         for d in frame_dets:
             if d.track is not None:
                 det_by_track[d.track].append((t, d))
-
     print('# tracks:', max(det_by_track.keys()))
+
+    tracks = {}
     for track in det_by_track:
         dets = det_by_track[track]
         if len(dets) < MIN_TRACK_LEN:
@@ -296,17 +218,52 @@ def save_results(out_dir, all_dets):
             pose.append(d.payload.pose)
 
         pose = np.stack(pose)
-        heatmap = np.stack(heatmap)
+        # heatmap = np.stack(heatmap)
         vipe = np.stack(vipe)
+        contacts = contact.infer_contact(contact_model, pose)
+        tracks[track] = (meta, pose, heatmap, mask, vipe, contacts)
+    return tracks
 
-        if out_dir is not None:
-            track_dir = os.path.join(out_dir, '{:06d}'.format(track))
-            os.makedirs(track_dir)
-            store_gz_json(os.path.join(track_dir, 'meta.json.gz'), meta)
-            np.save(os.path.join(track_dir, 'vipe.npy'), vipe)
-            np.save(os.path.join(track_dir, 'pose.npy'), pose)
-            np.save(os.path.join(track_dir, 'pose_heatmap.npy'), heatmap)
-            np.savez_compressed(os.path.join(track_dir, 'mask.npz'), **mask)
+
+def visualize_people(video_file, dets):
+    vc = cv2.VideoCapture(video_file)
+    num_frames = int(vc.get(cv2.CAP_PROP_FRAME_COUNT))
+
+    for i in trange(num_frames, desc='Visualize'):
+        ret, frame = vc.read()
+        if not ret:
+            break
+
+        draw(frame, dets[i])
+        cv2.imshow('frame', frame)
+        cv2.waitKey(1)
+
+    vc.release()
+    cv2.destroyAllWindows()
+
+
+def save_results(video_file, out_dir, tracks):
+    print('Saving results:')
+    for track in tracks:
+        meta, pose, heatmap, mask, vipe, contacts = tracks[track]
+        track_dir = os.path.join(out_dir, '{:06d}'.format(track))
+
+        os.makedirs(track_dir)
+        store_gz_json(os.path.join(track_dir, 'meta.json.gz'), meta)
+        np.save(os.path.join(track_dir, 'vipe.npy'), vipe)
+        np.save(os.path.join(track_dir, 'pose.npy'), pose)
+        np.save(os.path.join(track_dir, 'contact.npy'), contacts)
+        # np.save(os.path.join(track_dir, 'pose_heatmap.npy'), heatmap)
+        np.savez_compressed(os.path.join(track_dir, 'mask.npz'), **mask)
+
+    meta = get_metadata(video_file)
+    store_json(os.path.join(out_dir, 'meta.json'), {
+        'video_file': os.path.basename(video_file),
+        'fps': meta.fps,
+        'num_frames': meta.num_frames,
+        'width': meta.width,
+        'height': meta.height
+    })
 
 
 def main(video_file, use_yolo, visualize, out_dir, limit):
@@ -317,21 +274,29 @@ def main(video_file, use_yolo, visualize, out_dir, limit):
     vitpose.init_model()
 
     global vipe_model
-    vipe_model = load_embedding_model('pretrained_vipe')
+    vipe_model = vipe.load_embedding_model()
+
+    global contact_model
+    contact_model = contact.load_contact_model()
 
     def process(video_file, out_dir):
         detections = detect_people(video_file, use_yolo, limit)
         detections = track_people(detections)
         if visualize:
             visualize_people(video_file, detections)
-        save_results(out_dir, detections)
+
+        track_detections = group_by_track(detections)
+        if out_dir is not None:
+            save_results(video_file, out_dir, track_detections)
 
     if os.path.isdir(video_file):
         video_dir = video_file
-        for video_file in os.listdir(video_dir):
-            video_name = os.path.splitext(video_file)[0]
-            process(os.path.join(video_file, video_file),
-                    os.path.join(video_dir, video_name))
+        for video_file in tqdm(os.listdir(video_dir)):
+            if video_file.endswith('.mp4'):
+                video_name = os.path.splitext(video_file)[0]
+                print('Processing:', video_name)
+                process(os.path.join(video_dir, video_file),
+                        os.path.join(out_dir, video_name))
     else:
         process(video_file, out_dir)
     print('Done!')
