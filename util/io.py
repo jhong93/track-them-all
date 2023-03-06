@@ -58,8 +58,7 @@ def encode_png(data, optimize=True):
     im = Image.fromarray(data)
     fstream = BytesIO()
     im.save(fstream, format='png', optimize=optimize)
-    s = base64.encodebytes(fstream.getvalue()).decode()
-    return s
+    return fstream.getvalue()
 
 
 def load_text(fpath):

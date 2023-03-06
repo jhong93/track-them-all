@@ -19,7 +19,7 @@ from util.box import Box, PersonMeta
 from util.body import Pose
 from util.sort import Sort
 from util.vis import draw
-from util.io import store_gz_json, store_json
+from util.io import store_gz_json, store_json, store_pickle, encode_png
 
 cv2.setNumThreads(4)
 
@@ -144,7 +144,8 @@ def detect_people(video_file, use_yolo, limit, visualize=False, heatmap=False):
             det._payload = PersonMeta(
                 pose=keyp,
                 pose_heatmap=heatmap,
-                mask=det.payload,
+                mask=encode_png(det.payload)
+                    if det.payload is not None else None,
                 vipe=vipe_emb)
             frame_dets_cpy.append(det)
         frame_dets = frame_dets_cpy
@@ -227,7 +228,7 @@ def group_by_track_and_infer_contact(dets):
         meta = []
         pose = []
         heatmap = []
-        mask = {}
+        mask = []
         vipe = []
         for t, d in dets:
             meta.append({
@@ -236,7 +237,7 @@ def group_by_track_and_infer_contact(dets):
                 'score': d.score
             })
             heatmap.append(d.payload.pose_heatmap)
-            mask[str(t)] = d.payload.mask
+            mask.append(d.payload.mask)
             vipe.append(d.payload.vipe)
             pose.append(d.payload.pose)
 
@@ -280,8 +281,7 @@ def save_results(video_file, out_dir, track_iterator):
         # NOTE: dont bother with heatmaps
         # np.save(os.path.join(track_dir, 'pose_heatmap.npy'), heatmap)
 
-        # NOTE: find better way to store masks
-        np.savez_compressed(os.path.join(track_dir, 'mask.npz'), **mask)
+        store_pickle(os.path.join(track_dir, 'mask.pkl'), mask)
 
     meta = get_metadata(video_file)
     store_json(os.path.join(out_dir, 'meta.json'), {

@@ -13,7 +13,8 @@ from flask import Flask, send_file, render_template, request, jsonify
 
 from util.video import get_metadata
 from util.box import Box, PersonMeta
-from util.io import load_gz_json, load_json, store_json
+from util.io import (load_gz_json, load_json, store_json, load_pickle,
+                     decode_png)
 from util.vis import draw
 
 
@@ -115,6 +116,7 @@ def build_app(args):
         unlabeled_only = select == 'nolabel'
 
         num_accept = 0
+        num_reject = 0
         num_unlabeled = 0
         num_frames_accepted = 0
 
@@ -126,6 +128,8 @@ def build_app(args):
             elif label == 'accept':
                 num_accept += 1
                 num_frames_accepted += t.length
+            elif label == 'reject':
+                num_reject += 1
 
             if select is not None:
                 if unlabeled_only:
@@ -144,6 +148,7 @@ def build_app(args):
             num_tracks=len(tracks),
             num_frames=sum(t.length + 1 for t in tracks),
             num_accepted=num_accept,
+            num_rejected=num_reject,
             num_unlabeled=num_unlabeled,
             num_frames_accepted=num_frames_accepted,
             tracks=filtered_tracks)
@@ -159,11 +164,11 @@ def build_app(args):
             to_set = [track]
             for t in tracks:
                 if t.id != id and t.video == track.video:
-                    if track_iou(t, track) > 0:
+                    if track_iou(t, track) > 0.25:
                         # Also reject t
                         to_set.append(t)
             for t in to_set:
-                set_label(track, 'reject')
+                set_label(t, 'reject')
             return 'Success: {}'.format(value), 200
         else:
             if value == '':
@@ -177,8 +182,10 @@ def build_app(args):
 
     def load_frames(track, out_height=480):
         pose = np.load(os.path.join(track.path, 'pose.npy'), mmap_mode='r')
+        mask = load_pickle(os.path.join(track.path, 'mask.pkl'))
         box_dict = {det['t']: [Box(
-            *det['xywh'], det['score'], payload=PersonMeta(pose=pose[i])
+            *det['xywh'], det['score'], payload=PersonMeta(
+                pose=pose[i], mask=decode_png(mask[i]))
         )] for i, det in enumerate(track.detections)}
 
         frames = []
@@ -206,6 +213,7 @@ def build_app(args):
 
         track = tracks[id]
         pose = np.load(os.path.join(track.path, 'pose.npy'), mmap_mode='r')
+        mask = load_pickle(os.path.join(track.path, 'mask.pkl'))
         stride = int(len(track.detections) / n)
         dets = track.detections[::stride][:n]
 
@@ -216,8 +224,9 @@ def build_app(args):
 
         frames = []
         for i, det in enumerate(dets):
-            box = Box(*det['xywh'], det['score'],
-                      payload=PersonMeta(pose=pose[i * stride]))
+            box = Box(*det['xywh'], det['score'], payload=PersonMeta(
+                pose=pose[i * stride],
+                mask=decode_png(mask[i * stride])))
 
             vc.set(cv2.CAP_PROP_POS_FRAMES, det['t'])
             _, frame = vc.read()
@@ -231,6 +240,10 @@ def build_app(args):
         f.seek(0)
         return send_file(f, mimetype='image/jpeg')
 
+    # @app.route('/track-frame/<int:id>/<int:idx>')
+    # def get_track_frame(id, idx):
+    #     pass
+
     @app.route('/track-gif/<int:id>')
     def get_track_gif(id):
         frames, fps = load_frames(tracks[id])
@@ -240,7 +253,7 @@ def build_app(args):
         img0 = imgs[0]
         img0.save(fp=gif_bytes, format='GIF',
                   append_images=imgs[1:], save_all=True,
-                  duration=1 / fps * 5, loop=0)
+                  duration=1 / fps, loop=0)
         gif_bytes.seek(0)
         return send_file(gif_bytes, mimetype='image/gif')
 

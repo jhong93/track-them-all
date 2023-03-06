@@ -1,6 +1,7 @@
 import torch
 import numpy as np
 
+import detectron2.data.transforms as T
 from detectron2.checkpoint import DetectionCheckpointer
 from detectron2.config import LazyConfig, instantiate
 from detectron2.structures.boxes import BoxMode
@@ -12,20 +13,21 @@ CHECKPOINT_FILE = 'eva_coco_seg.pth'
 
 
 def init_model(device='cuda'):
-    global model
+    global model, augment
     cfg = LazyConfig.load(CONFIG_FILE)
     model = instantiate(cfg.model)
     model.to(device)
     DetectionCheckpointer(model).load(CHECKPOINT_FILE)
     model.eval()
+    augment = T.ResizeShortestEdge([720, 720], 1280)
 
 
-def infer(img):
-    height, width = img.shape[:2]
+def infer(orig_img):
+    height, width = orig_img.shape[:2]
     with torch.no_grad():
+        img = augment.get_transform(orig_img).apply_image(orig_img)
         inputs = {
-            'image': torch.as_tensor(
-                img.astype('float32').transpose(2, 0, 1)),
+            'image': torch.as_tensor(img.astype('float32').transpose(2, 0, 1)),
             'width': width,
             'height': height
         }
