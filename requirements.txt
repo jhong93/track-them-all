@@ -3,9 +3,10 @@ numpy
 torch
 scipy
 tqdm
-mmcv-full
+mmcv-full==1.6.1
 timm
 scikit-learn
 einops
 wandb
 filterpy
+ultralytics
