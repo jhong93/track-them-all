@@ -11,13 +11,7 @@ import torch
 from tqdm import tqdm
 
 from common import constants
-from common.imutils import process_image
-from common.utils import strip_prefix_if_present, cam_crop2full
-from common.utils import estimate_focal_length
 from common.renderer_pyrd import Renderer
-
-
-DEVICE = torch.device('cuda')
 
 
 def get_args():
@@ -39,26 +33,56 @@ def load_gz_json(fpath):
 
 def main(args):
     # Setup the SMPL model
-    smpl_model = smplx.create(constants.SMPL_MODEL_DIR, 'smpl').to(DEVICE)
+    smpl_model = smplx.create(constants.SMPL_MODEL_DIR, 'smpl')
 
-    for video in os.listdir(args.data_dir):
-        video_dir = os.path.join(args.data_dir, video)
+    video_meta = load_json(os.path.join(args.track_dir, '..', 'meta.json'))
+    video_file = os.path.join(args.video_dir, video_meta['video_file'])
 
-        video_meta = load_json(os.path.join(video_dir, 'meta.json'))
-        for track in tqdm(os.listdir(video_dir), desc=video):
-            track_dir = os.path.join(video_dir, track)
-            if not os.path.isdir(track_dir):
-                continue
+    detections = load_gz_json(os.path.join(args.track_dir, 'meta.json.gz'))
+    smpl_data = np.load(os.path.join(args.track_dir, 'smpl.npz'))
 
-            label_file = os.path.join(track_dir, 'label.json')
-            if (not os.path.exists(label_file)
-                or load_json(label_file)['value'] != 'accept'
-            ):
-                continue
+    pose = smpl_data['pose']
+    betas = smpl_data['shape']
+    trans = smpl_data['global_t']
+    focal_l = smpl_data['focal_l']
 
-            process_track(
-                os.path.join(args.video_dir, video_meta['video_file']),
-                track_dir, args.visualize)
+    pred_vert_arr =[]
+    for i in range(len(detections)):
+        betas_i = torch.from_numpy(betas[i]).unsqueeze(0)
+        pose_i = torch.from_numpy(pose[i][1:]).unsqueeze(0)
+        orient_i = torch.from_numpy(pose[i][[0]]).unsqueeze(0)
+        trans_i = torch.from_numpy(trans[i]).unsqueeze(0)
+
+        pred_output = smpl_model(
+            betas=betas_i,
+            body_pose=pose_i,
+            global_orient=orient_i,
+            pose2rot=False,
+            transl=trans_i)
+        pred_vertices = pred_output.vertices
+        pred_vert_arr.extend(pred_vertices.cpu().numpy())
+
+    vc = cv2.VideoCapture(video_file)
+    gap = int(1000 / vc.get(cv2.CAP_PROP_FPS))
+    for i, det in enumerate(tqdm(detections)):
+        t = det['t']
+        if t != int(vc.get(cv2.CAP_PROP_POS_FRAMES)):
+            vc.set(cv2.CAP_PROP_POS_FRAMES, t)
+
+        _, img_bgr = vc.read()
+        img_h, img_w, _ = img_bgr.shape
+        renderer = Renderer(
+            focal_length=focal_l[i], img_w=img_w, img_h=img_h,
+            faces=smpl_model.faces,
+            same_mesh_color=True)
+        front_view = renderer.render_front_view(
+            pred_vert_arr[i:i + 1],
+            bg_img_rgb=img_bgr[:, :, ::-1].copy())
+        renderer.delete()
+
+        cv2.imshow('front', front_view)
+        cv2.waitKey(gap)
+    vc.release()
     print('Done!')
 
 
