@@ -162,7 +162,7 @@ def preprocess_2d_keyp(kp, flip, to_tensor=True):
 
 
 DEFAULT_MODEL_DIR = os.path.join(
-    os.path.dirname(os.path.realpath(__file__)), 'pretrained_vipe')
+    os.path.dirname(os.path.realpath(__file__)), 'vipe_data')
 
 
 def load_embedding_model(model_dir=DEFAULT_MODEL_DIR, device='cuda'):

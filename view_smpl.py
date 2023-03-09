@@ -17,10 +17,11 @@ def get_args():
     parser = argparse.ArgumentParser()
     parser.add_argument('data_dir')
     parser.add_argument('video_dir')
+    parser.add_argument('-o', '--out_dir')
     return parser.parse_args()
 
 
-def render(track_dir, video_file):
+def render(track_dir, video_file, out_file=None, out_height=480):
     detections = load_gz_json(os.path.join(track_dir, 'meta.json.gz'))
     smpl_data = np.load(os.path.join(track_dir, 'smpl.npz'))
 
@@ -46,7 +47,14 @@ def render(track_dir, video_file):
         pred_vert_arr.extend(pred_vertices.cpu().numpy())
 
     vc = cv2.VideoCapture(video_file)
-    gap = int(1000 / vc.get(cv2.CAP_PROP_FPS))
+    height = int(vc.get(cv2.CAP_PROP_FRAME_HEIGHT))
+    width = int(vc.get(cv2.CAP_PROP_FRAME_WIDTH))
+    out_shape = (int(out_height / height * width), out_height)
+
+    if out_file is not None:
+        vo = cv2.VideoWriter(out_file, cv2.VideoWriter_fourcc(*'h264'),
+                             vc.get(cv2.CAP_PROP_FPS), out_shape)
+
     for i, det in enumerate(tqdm(detections)):
         t = det['t']
         if t != int(vc.get(cv2.CAP_PROP_POS_FRAMES)):
@@ -61,11 +69,19 @@ def render(track_dir, video_file):
         front_view = renderer.render_front_view(
             pred_vert_arr[i:i + 1],
             bg_img_rgb=img_bgr[:, :, ::-1].copy())
+        side_view = renderer.render_side_view(np.array(pred_vert_arr[i:i + 1]))
+        img = np.vstack((cv2.resize(front_view, out_shape),
+                         cv2.resize(side_view, out_shape)))
         renderer.delete()
 
-        cv2.imshow('front', cv2.cvtColor(front_view, cv2.COLOR_BGR2RGB))
-        cv2.waitKey(1)
+        if out_file is not None:
+            vo.write(img)
+        else:
+            cv2.imshow('frame', cv2.cvtColor(img, cv2.COLOR_BGR2RGB))
+            cv2.waitKey(1)
     vc.release()
+    if out_file is not None:
+        vo.release()
 
 
 def main(args):
@@ -90,8 +106,15 @@ def main(args):
             ):
                 continue
 
+            out_file = None
+            if args.out_dir is not None:
+                os.makedirs(args.out_dir, exist_ok=True)
+                out_file = os.path.join(args.out_dir, '{}__{}.mkv'.format(
+                    video, track))
             render(track_data_dir,
-                   os.path.join(args.video_dir, video_meta['video_file']))
+                   os.path.join(args.video_dir, video_meta['video_file']),
+                   out_file=out_file)
+
     print('Done!')
 
 

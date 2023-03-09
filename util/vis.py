@@ -44,7 +44,9 @@ def draw(frame, boxes, alpha=0.33, thickness=2, track_colors={}):
                           int(box.payload.pose[b2, 1]))
                 cv2.line(frame, b1_int, b2_int, color, thickness)
 
-        if box.payload.mask is not None:
+        if (box.payload.mask is not None
+            and not isinstance(box.payload.mask, bytes)
+        ):
             if not has_mask:
                 mask_frame = np.zeros_like(frame)
             has_mask = True

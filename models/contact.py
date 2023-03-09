@@ -11,7 +11,7 @@ from util.body import Pose
 
 DEFAULT_MODEL_PATH = os.path.join(
     os.path.dirname(os.path.realpath(__file__)),
-    'pretrained_contact', '10000.pt')
+    'contact_data', '10000.pt')
 
 # Number of frames of input and output
 DEFAULT_INPUT_LEN = 9

@@ -8,11 +8,11 @@ import numpy as np
 from torch.utils.data import DataLoader, Dataset
 from tqdm import tqdm, trange
 
-import vipe
-import contact
-import vitpose
-import eva
-import yolo
+import models.vipe as vipe
+import models.contact as contact
+import models.vitpose as vitpose
+import models.eva as eva
+import models.yolo as yolo
 
 from util.video import get_metadata
 from util.box import Box, PersonMeta
@@ -40,7 +40,7 @@ def get_args():
     parser.add_argument('-v', '--visualize_detection', action='store_true')
     parser.add_argument('-vt', '--visualize_tracking', action='store_true')
     parser.add_argument('--limit', type=int)
-    parser.add_argument('--out_dir')
+    parser.add_argument('-o', '--out_dir')
     return parser.parse_args()
 
 
