@@ -37,6 +37,7 @@ class Track(NamedTuple):
     path: str
     length: int
     min_frame: int
+    fps: float
     detections: object
     has_3d: bool
 
@@ -64,6 +65,7 @@ def list_tracks(track_dir):
                 track_path,
                 max_t - min_t + 1,
                 min_t,
+                meta['fps'],
                 det_data,
                 has_3d))
             count += 1
@@ -209,7 +211,8 @@ def build_app(args):
         num_accept = 0
         num_reject = 0
         num_unlabeled = 0
-        num_frames_accepted = 0
+        num_seconds = 0
+        num_seconds_accepted = 0
 
         filtered_tracks = []
         for t in tracks:
@@ -218,9 +221,10 @@ def build_app(args):
                 num_unlabeled += 1
             elif label == 'accept':
                 num_accept += 1
-                num_frames_accepted += t.length
+                num_seconds_accepted += t.length / t.fps
             elif label == 'reject':
                 num_reject += 1
+            num_seconds += t.length / t.fps
 
             if select is not None:
                 if unlabeled_only:
@@ -242,7 +246,8 @@ def build_app(args):
             num_accepted=num_accept,
             num_rejected=num_reject,
             num_unlabeled=num_unlabeled,
-            num_frames_accepted=num_frames_accepted,
+            num_seconds=round(num_seconds),
+            num_seconds_accepted=round(num_seconds_accepted),
             tracks=filtered_tracks)
 
     @app.route('/label/<int:id>', methods=['POST'])
