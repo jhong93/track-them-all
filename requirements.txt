@@ -1,5 +1,5 @@
 flask
-numpy
+numpy==1.23.1
 torch
 scipy
 tqdm
@@ -10,3 +10,6 @@ einops
 wandb
 filterpy
 ultralytics
+smplx
+trimesh
+pyrender

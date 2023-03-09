@@ -67,6 +67,9 @@ img {
             <div class="kv">
                 <span class="key">{{ t.id }}</span>
                 <span class="value">{{ t.video }}, {{ t.track }}, {{ t.length }} frames</span>
+                {% if t.has_3d %}
+                <a href="/smpl-gif/{{ t.id }}" target="_blank">[View 3D]</a>
+                {% endif %}
             </div>
             <div class="controls">
                 <div class="btn-group" role="group">

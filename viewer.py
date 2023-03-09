@@ -6,6 +6,9 @@ import datetime
 from io import BytesIO
 from typing import NamedTuple
 import cv2
+import smplx
+import torch
+from tqdm import tqdm, trange
 from PIL import Image
 import numpy as np
 
@@ -16,6 +19,7 @@ from util.box import Box, PersonMeta
 from util.io import (load_gz_json, load_json, store_json, load_pickle,
                      decode_png)
 from util.vis import draw
+from util.renderer_pyrd import Renderer
 
 
 def get_args():
@@ -34,6 +38,7 @@ class Track(NamedTuple):
     length: int
     min_frame: int
     detections: object
+    has_3d: bool
 
 
 def list_tracks(track_dir):
@@ -50,6 +55,8 @@ def list_tracks(track_dir):
             det_data = load_gz_json(os.path.join(track_path, 'meta.json.gz'))
             max_t = det_data[-1]['t']
             min_t = det_data[0]['t']
+
+            has_3d = os.path.exists(os.path.join(track_path, 'smpl.npz'))
             tracks.append(Track(
                 count,
                 meta['video_file'],
@@ -57,7 +64,8 @@ def list_tracks(track_dir):
                 track_path,
                 max_t - min_t + 1,
                 min_t,
-                det_data))
+                det_data,
+                has_3d))
             count += 1
     return tracks
 
@@ -68,6 +76,7 @@ class TrackInfo(NamedTuple):
     track: int
     length: int
     label: str
+    has_3d: bool
 
 
 def get_label(track):
@@ -96,6 +105,88 @@ def track_iou(t1, t2):
     if overlap < 0:
         return 0.
     return overlap / (t1.length + t2.length - overlap)
+
+
+def load_frames_w_track(video_dir, track, out_height=480):
+    pose = np.load(os.path.join(track.path, 'pose.npy'), mmap_mode='r')
+    mask = load_pickle(os.path.join(track.path, 'mask.pkl'))
+    box_dict = {det['t']: [Box(
+        *det['xywh'], det['score'], payload=PersonMeta(
+            pose=pose[i], mask=decode_png(mask[i]))
+    )] for i, det in enumerate(track.detections)}
+
+    frames = []
+    vc = cv2.VideoCapture(os.path.join(video_dir, track.video))
+    fps = vc.get(cv2.CAP_PROP_FPS)
+    height = int(vc.get(cv2.CAP_PROP_FRAME_HEIGHT))
+    width = int(vc.get(cv2.CAP_PROP_FRAME_WIDTH))
+    out_width = int(out_height / height * width)
+
+    vc.set(cv2.CAP_PROP_POS_FRAMES, track.min_frame)
+    for i in range(track.min_frame, track.min_frame + track.length + 1):
+        ret, frame = vc.read()
+        if not ret:
+            break
+
+        frame = draw(frame, box_dict.get(i, []))
+        frame = cv2.resize(frame, (out_width, out_height))
+        frames.append(cv2.cvtColor(frame, cv2.COLOR_BGR2RGB))
+    vc.release()
+    return frames, fps
+
+
+def load_frames_w_smpl(video_dir, track, out_height=480):
+    smpl_model = smplx.create('data', 'smpl')
+
+    smpl_data = np.load(os.path.join(track.path, 'smpl.npz'))
+    pose = smpl_data['pose']
+    betas = smpl_data['shape']
+    trans = smpl_data['global_t']
+    focal_l = smpl_data['focal_l']
+
+    pred_vert_arr = []
+    for i in trange(len(track.detections), desc='Running SMPL'):
+        betas_i = torch.from_numpy(betas[i]).unsqueeze(0)
+        pose_i = torch.from_numpy(pose[i][1:]).unsqueeze(0)
+        orient_i = torch.from_numpy(pose[i][[0]]).unsqueeze(0)
+        trans_i = torch.from_numpy(trans[i]).unsqueeze(0)
+
+        pred_output = smpl_model(
+            betas=betas_i,
+            body_pose=pose_i,
+            global_orient=orient_i,
+            pose2rot=False,
+            transl=trans_i)
+        pred_vertices = pred_output.vertices
+        pred_vert_arr.extend(pred_vertices.cpu().numpy())
+
+    vc = cv2.VideoCapture(os.path.join(video_dir, track.video))
+    fps = vc.get(cv2.CAP_PROP_FPS)
+    gap = int(1000 / fps)
+    height = int(vc.get(cv2.CAP_PROP_FRAME_HEIGHT))
+    width = int(vc.get(cv2.CAP_PROP_FRAME_WIDTH))
+    out_width = int(out_height / height * width)
+
+    frames = []
+    for i, det in enumerate(tqdm(track.detections, desc='Rendering')):
+        t = det['t']
+        if t != int(vc.get(cv2.CAP_PROP_POS_FRAMES)):
+            vc.set(cv2.CAP_PROP_POS_FRAMES, t)
+
+        _, img_bgr = vc.read()
+        img_h, img_w, _ = img_bgr.shape
+        renderer = Renderer(
+            focal_length=focal_l[i], img_w=img_w, img_h=img_h,
+            faces=smpl_model.faces,
+            same_mesh_color=True)
+        front_view = renderer.render_front_view(
+            pred_vert_arr[i:i + 1],
+            bg_img_rgb=img_bgr[:, :, ::-1].copy())
+        renderer.delete()
+
+        frames.append(cv2.resize(front_view, (out_width, out_height)))
+    vc.release()
+    return frames, fps
 
 
 def build_app(args):
@@ -138,9 +229,10 @@ def build_app(args):
                 else:
                     if label != select:
                         continue
+
             filtered_tracks.append(TrackInfo(
                 id=t.id, video=t.video, track=t.track, length=t.length,
-                label=label))
+                label=label, has_3d=t.has_3d))
 
         filtered_tracks.sort(key=lambda x: -x.length)
         return render_template(
@@ -180,33 +272,6 @@ def build_app(args):
     def _get_label(id):
         return str(get_label(tracks[id])), 200
 
-    def load_frames(track, out_height=480):
-        pose = np.load(os.path.join(track.path, 'pose.npy'), mmap_mode='r')
-        mask = load_pickle(os.path.join(track.path, 'mask.pkl'))
-        box_dict = {det['t']: [Box(
-            *det['xywh'], det['score'], payload=PersonMeta(
-                pose=pose[i], mask=decode_png(mask[i]))
-        )] for i, det in enumerate(track.detections)}
-
-        frames = []
-        vc = cv2.VideoCapture(os.path.join(args.video_dir, track.video))
-        fps = vc.get(cv2.CAP_PROP_FPS)
-        height = int(vc.get(cv2.CAP_PROP_FRAME_HEIGHT))
-        width = int(vc.get(cv2.CAP_PROP_FRAME_WIDTH))
-        out_width = int(out_height / height * width)
-
-        vc.set(cv2.CAP_PROP_POS_FRAMES, track.min_frame)
-        for i in range(track.min_frame, track.min_frame + track.length + 1):
-            ret, frame = vc.read()
-            if not ret:
-                break
-
-            frame = draw(frame, box_dict.get(i, []))
-            frame = cv2.resize(frame, (out_width, out_height))
-            frames.append(cv2.cvtColor(frame, cv2.COLOR_BGR2RGB))
-        vc.release()
-        return frames, fps
-
     @app.route('/track-preview/<int:id>')
     def get_track_preview(id, n=5):
         out_height = request.args.get('height', type=int, default=240)
@@ -240,13 +305,7 @@ def build_app(args):
         f.seek(0)
         return send_file(f, mimetype='image/jpeg')
 
-    # @app.route('/track-frame/<int:id>/<int:idx>')
-    # def get_track_frame(id, idx):
-    #     pass
-
-    @app.route('/track-gif/<int:id>')
-    def get_track_gif(id):
-        frames, fps = load_frames(tracks[id])
+    def send_gif(frames, fps):
         imgs = [Image.fromarray(x) for x in frames]
 
         gif_bytes = BytesIO()
@@ -256,6 +315,16 @@ def build_app(args):
                   duration=1 / fps, loop=0)
         gif_bytes.seek(0)
         return send_file(gif_bytes, mimetype='image/gif')
+
+    @app.route('/track-gif/<int:id>')
+    def get_track_gif(id):
+        frames, fps = load_frames_w_track(args.video_dir, tracks[id])
+        return send_gif(frames, fps)
+
+    @app.route('/smpl-gif/<int:id>')
+    def get_smpl_gif(id):
+        frames, fps = load_frames_w_smpl(args.video_dir, tracks[id])
+        return send_gif(frames, fps)
 
     @app.route('/labels')
     @app.route('/labels.json')

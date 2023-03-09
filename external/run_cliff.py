@@ -175,7 +175,7 @@ def process_track(video_file, track_dir, visualize):
                 bg_img_rgb=img_bgr[:, :, ::-1].copy())
             renderer.delete()
 
-            cv2.imshow('front', front_view)
+            cv2.imshow('front', cv2.cvtColor(front_view, cv2.COLOR_BGR2RGB))
             cv2.waitKey(gap)
         vc.release()
 
