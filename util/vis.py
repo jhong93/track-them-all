@@ -51,7 +51,8 @@ def draw(frame, boxes, alpha=0.33, thickness=2, track_colors={}):
                 mask_frame = np.zeros_like(frame)
             has_mask = True
 
-            x, y, w, h = int(box.x), int(box.y), int(box.w), int(box.h)
+            x, y = int(box.x), int(box.y)
+            h, w = box.payload.mask.shape[:2]
             mask_frame[y:y + h, x:x + w, 2] = box.payload.mask * 255
 
     if has_mask:

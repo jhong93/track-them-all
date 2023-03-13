@@ -205,6 +205,7 @@ def build_app(args):
 
     @app.route('/')
     def root():
+        limit = request.args.get('limit', type=int, default=500)
         select = request.args.get('select')
         unlabeled_only = select == 'nolabel'
 
@@ -239,6 +240,7 @@ def build_app(args):
                 label=label, has_3d=t.has_3d))
 
         filtered_tracks.sort(key=lambda x: -x.length)
+        filtered_tracks = filtered_tracks[:limit]
         return render_template(
             'root.html',
             num_tracks=len(tracks),
